@@ -4,14 +4,22 @@ function addTarefa(novaTarefa){
     tarefas.appendChild(li);
     const span = criaSpan();
     span.innerText += novaTarefa;
-    li.appendChild(span);
-    criaCheckbox(li, span);
+    const div = criaDiv();
+    li.appendChild(div);
+    div.appendChild(span);
+    criaCheckbox(div, span);
     criaBotaoApagar(li);
     
     
     salvarTarefa();
     
     limpaInput();
+}
+
+function criaDiv(){
+    const div = document.createElement("div");
+    div.setAttribute("class", "marca-tarefa")
+    return div;
 }
 
 function criaSpan(){
@@ -33,7 +41,7 @@ function criaBotaoApagar(li){
 
     const botaoApagar = document.createElement('button');
     botaoApagar.setAttribute("class", "apagar");
-    botaoApagar.innerText = "Apagar";
+    botaoApagar.innerText = "-";
     li.appendChild(botaoApagar);
 }
 
@@ -49,7 +57,7 @@ function salvarTarefa(){
     const liTarefas = tarefas.querySelectorAll("li");
     const listaTarefas = []; 
     for(let dale of liTarefas){
-        listaTarefas.push(dale.innerText.replace('Apagar', '').trim());
+        listaTarefas.push(dale.innerText.replace('-', '').trim());
     }
 
     const tarefasJSON = JSON.stringify(listaTarefas);
@@ -99,10 +107,7 @@ document.addEventListener("click", function(e){
         
     }
 
-    if(evento.classList.contains("check")){
-        const check = document.querySelector(".check");
-        check.classList.toggle('checado');
-    }
+
 });
 
 

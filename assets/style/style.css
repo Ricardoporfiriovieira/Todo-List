@@ -28,8 +28,8 @@ body{
     
 }
 
-.checado {
-    
+input.check:checked + span{
+    text-decoration: line-through;
 }
 
 h1{
@@ -54,4 +54,77 @@ button{
 
 span {
     margin: 0rem 8rem 1rem 0rem;
+}
+
+.input{
+    padding: 5px;
+    border: none;
+    border-radius: 4px;
+    font: inherit;
+    color: black;
+    background-color: transparent;
+    outline: 2px solid black;
+    margin: 1rem 0rem 1rem 1rem;
+}
+
+.input-label{
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform: translate(30px, 12px);
+    transition: transform .25px;
+    color: rgba(59, 59, 59, 0.61);
+}
+
+.input:focus+.input-label,.input:valid+.input-label{
+    transform: translate(10px, -14px) scale(.8);
+    color: black;
+    padding-inline: 5px;
+    background-color: aliceblue;
+}
+
+.input-group{
+    position: relative;
+    display: inline-block;
+}
+
+.btn-visual{
+    padding: 7px 10px;
+    border-style: none;
+    outline: 2px solid black;
+    border-radius: 0px 4px 4px 0px;
+    background-color: greenyellow;
+    cursor: pointer;
+}
+
+.container-pesquisa{
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.container-tarefas{
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+}
+
+.apagar{
+    padding: 1px 7px;
+    border-style: none;
+    outline: 2px solid black;
+    border-radius: 2px;
+
+    background-color: red;
+    cursor: pointer;
+}
+
+li{
+    display: flex;
+    justify-content: space-between;
+}
+
+input[type="checkbox"]:checked + label::before{
+    background-color: red;
 }

@@ -11,14 +11,20 @@
     
     <section class="container">
         <h1>Lista de tarefas</h1>
-        <p>
-            <input type="text" class="input-add-tarefa">
-            <button class="btn-add-tarefa">Adicionar nova tarefa</button>
-        </p>
-
-        <ul class="tarefas">
+        
+            <div class="container-pesquisa">
+                <div class="input-group">
+                    <input type="text" id="pesquisa" required class="input-add-tarefa input">
+                    <label for="pesquisa" class="input-label">adicione uma tarefa</label>
+                </div>
+                <button class="btn-add-tarefa btn-visual">+</button>
+            </div>
             
-        </ul>
+
+            <div class="container-tarefas">
+                <ul class="tarefas"></ul>
+            </div>
+            
     </section>
 
     <script src="assets/js/main.js"></script>
