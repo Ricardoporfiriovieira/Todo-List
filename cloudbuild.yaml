@@ -1,0 +1,228 @@
+# Cloud Build Configuration for QualityGate AI
+# Este arquivo define o pipeline de CI/CD que será executado quando um PR for criado/atualizado
+
+steps:
+  # Step 1: Coletar metadados do Pull Request
+  - name: 'gcr.io/cloud-builders/git'
+    id: 'collect-pr-metadata'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "Coletando metadados do Pull Request..."
+        
+        # Variáveis disponíveis do Cloud Build
+        echo "Branch: $BRANCH_NAME"
+        echo "Commit SHA: $COMMIT_SHA"
+        echo "PR Number: $_PR_NUMBER"
+        echo "Base Branch: $_BASE_BRANCH"
+        
+        # Clonar o repositório se necessário
+        if [ ! -d ".git" ]; then
+          git clone $_REPO_URL .
+        fi
+        
+        # Obter lista de arquivos modificados
+        git fetch origin $BRANCH_NAME
+        git fetch origin $_BASE_BRANCH
+        
+        # Comparar branches para obter arquivos modificados
+        MODIFIED_FILES=$(git diff --name-only origin/$_BASE_BRANCH...origin/$BRANCH_NAME | grep '\.py$' || echo "")
+        
+        echo "Arquivos Python modificados:"
+        echo "$MODIFIED_FILES"
+        
+        # Salvar metadados para próximos steps
+        echo "$MODIFIED_FILES" > /workspace/modified_files.txt
+        echo "$BRANCH_NAME" > /workspace/branch_name.txt
+        echo "$COMMIT_SHA" > /workspace/commit_sha.txt
+
+  # Step 2: Extrair ID do Jira (se existir)
+  - name: 'gcr.io/cloud-builders/git'
+    id: 'extract-jira-id'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "Extraindo ID do Jira..."
+        
+        # Tentar extrair do nome da branch (formato: feature/PROJ-123-description)
+        JIRA_ID=$(echo "$BRANCH_NAME" | grep -oE '[A-Z]+-[0-9]+' | head -1 || echo "")
+        
+        # Se não encontrou na branch, tentar na mensagem de commit
+        if [ -z "$JIRA_ID" ]; then
+          COMMIT_MSG=$(git log -1 --pretty=%B $COMMIT_SHA)
+          JIRA_ID=$(echo "$COMMIT_MSG" | grep -oE '\[[A-Z]+-[0-9]+\]' | tr -d '[]' || echo "")
+        fi
+        
+        if [ -n "$JIRA_ID" ]; then
+          echo "Jira ID encontrado: $JIRA_ID"
+          echo "$JIRA_ID" > /workspace/jira_id.txt
+        else
+          echo "Nenhum ID do Jira encontrado"
+          echo "" > /workspace/jira_id.txt
+        fi
+
+  # Step 3: Preparar payload para o agente
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'prepare-agent-payload'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "Preparando payload para o Vertex AI Agent..."
+        
+        # Ler os dados coletados
+        MODIFIED_FILES=$(cat /workspace/modified_files.txt | tr '\n' ',' | sed 's/,$//')
+        BRANCH_NAME=$(cat /workspace/branch_name.txt)
+        COMMIT_SHA=$(cat /workspace/commit_sha.txt)
+        JIRA_ID=$(cat /workspace/jira_id.txt)
+        
+        # Construir JSON payload
+        cat > /workspace/agent_payload.json <<EOF
+        {
+          "ci_trigger": true,
+          "pr_metadata": {
+            "repository_url": "$_REPO_URL",
+            "branch_name": "$BRANCH_NAME",
+            "base_branch": "$_BASE_BRANCH",
+            "commit_sha": "$COMMIT_SHA",
+            "pr_number": "$_PR_NUMBER",
+            "modified_files": "$MODIFIED_FILES",
+            "jira_id": "$JIRA_ID"
+          }
+        }
+        EOF
+        
+        echo "Payload criado:"
+        cat /workspace/agent_payload.json
+
+  # Step 4: Obter secrets do Secret Manager
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'fetch-secrets'
+    entrypoint: 'bash'
+    secretEnv: ['GITHUB_TOKEN', 'JIRA_TOKEN', 'JIRA_EMAIL', 'JIRA_BASE_URL']
+    args:
+      - '-c'
+      - |
+        echo "Secrets carregados do Secret Manager"
+        # Os secrets já estão disponíveis como variáveis de ambiente
+        # via secretEnv
+
+  # Step 5: Invocar o Vertex AI Agent
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'invoke-agent'
+    entrypoint: 'bash'
+    secretEnv: ['GITHUB_TOKEN', 'JIRA_TOKEN', 'JIRA_EMAIL', 'JIRA_BASE_URL']
+    args:
+      - '-c'
+      - |
+        echo "Invocando o Vertex AI Agent Engine..."
+        
+        # Exportar secrets como variáveis de ambiente para o agente
+        export GITHUB_TOKEN="$$GITHUB_TOKEN"
+        export JIRA_TOKEN="$$JIRA_TOKEN"
+        export JIRA_EMAIL="$$JIRA_EMAIL"
+        export JIRA_BASE_URL="$$JIRA_BASE_URL"
+        
+        # Ler o payload
+        PAYLOAD=$(cat /workspace/agent_payload.json)
+        
+        # Invocar o agente via API do Vertex AI
+        # Nota: Ajuste o endpoint conforme seu deployment
+        gcloud ai endpoints predict $_VERTEX_AI_ENDPOINT_ID \
+          --region=$_VERTEX_AI_REGION \
+          --json-request=/workspace/agent_payload.json \
+          > /workspace/agent_response.json
+        
+        echo "Resposta do agente:"
+        cat /workspace/agent_response.json
+        
+        # Verificar se houve sucesso
+        if [ $? -eq 0 ]; then
+          echo "Agente executado com sucesso!"
+        else
+          echo "Erro ao executar o agente"
+          exit 1
+        fi
+
+  # Step 6: Processar resposta e atualizar status
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'process-response'
+    entrypoint: 'bash'
+    secretEnv: ['GITHUB_TOKEN', 'JIRA_TOKEN']
+    args:
+      - '-c'
+      - |
+        echo "Processando resposta do agente..."
+        
+        # Ler a resposta
+        if [ -f /workspace/agent_response.json ]; then
+          # Extrair informações relevantes (ajuste conforme o formato da resposta)
+          AGENT_STATUS=$(cat /workspace/agent_response.json | jq -r '.status // "unknown"')
+          NEW_PR_URL=$(cat /workspace/agent_response.json | jq -r '.new_pr_url // ""')
+          
+          echo "Status: $AGENT_STATUS"
+          echo "Novo PR: $NEW_PR_URL"
+          
+          # Se um novo PR foi criado e há um Jira ID, adicionar comentário
+          if [ -n "$NEW_PR_URL" ] && [ -n "$(cat /workspace/jira_id.txt)" ]; then
+            JIRA_ID=$(cat /workspace/jira_id.txt)
+            
+            # Adicionar comentário no Jira com o link do PR
+            JIRA_COMMENT="QualityGate AI criou um PR com testes e documentação: $NEW_PR_URL"
+            
+            curl -X POST \
+              -H "Content-Type: application/json" \
+              -u "$$JIRA_EMAIL:$$JIRA_TOKEN" \
+              "$$JIRA_BASE_URL/rest/api/3/issue/$JIRA_ID/comment" \
+              -d "{\"body\": {\"type\": \"doc\", \"version\": 1, \"content\": [{\"type\": \"paragraph\", \"content\": [{\"type\": \"text\", \"text\": \"$JIRA_COMMENT\"}]}]}}"
+            
+            echo "Comentário adicionado ao Jira: $JIRA_ID"
+          fi
+        else
+          echo "Arquivo de resposta não encontrado"
+          exit 1
+        fi
+
+# Timeout total do build (30 minutos)
+timeout: 1800s
+
+# Opções do build
+options:
+  # Tipo de máquina
+  machineType: 'N1_HIGHCPU_8'
+  
+  # Logging
+  logging: CLOUD_LOGGING_ONLY
+  
+  # Worker pool (opcional, para builds em VPC privada)
+  # pool:
+  #   name: 'projects/${PROJECT_ID}/locations/${_VERTEX_AI_REGION}/workerPools/qualitygate-pool'
+
+# Secrets disponíveis do Secret Manager
+availableSecrets:
+  secretManager:
+    - versionName: projects/$PROJECT_ID/secrets/github-token/versions/latest
+      env: 'GITHUB_TOKEN'
+    - versionName: projects/$PROJECT_ID/secrets/jira-token/versions/latest
+      env: 'JIRA_TOKEN'
+    - versionName: projects/$PROJECT_ID/secrets/jira-email/versions/latest
+      env: 'JIRA_EMAIL'
+    - versionName: projects/$PROJECT_ID/secrets/jira-base-url/versions/latest
+      env: 'JIRA_BASE_URL'
+
+# Variáveis de substituição (substitutions)
+# Estas serão fornecidas pelo trigger ou podem ter valores padrão
+substitutions:
+  _VERTEX_AI_ENDPOINT_ID: 'seu-endpoint-id'  # Substitua pelo ID do seu endpoint
+  _VERTEX_AI_REGION: 'us-central1'  # Substitua pela sua região
+  _REPO_URL: ''  # Será preenchido pelo trigger
+  _BASE_BRANCH: 'main'  # Branch base padrão
+  _PR_NUMBER: ''  # Será preenchido pelo trigger
+
+# Tags para organização
+tags:
+  - 'qualitygate-ai'
+  - 'pr-analysis'
+  - 'automated-testing'
